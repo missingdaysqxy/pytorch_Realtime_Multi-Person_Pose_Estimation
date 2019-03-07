@@ -14,7 +14,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
 from collections import OrderedDict
-from config_reader import config_reader
 from scipy.ndimage.filters import gaussian_filter
 from network.rtpose_vgg import get_model
 from network.post import decode_pose
@@ -28,10 +27,11 @@ from evaluate.coco_eval import get_multiplier, get_outputs
 #parser.add_argument('--pth_file', required=True)
 #args = parser.parse_args()
 
-weight_name = './network/weight/pose_model.pth'
+weight_name = '../network/weight/pose_model.pth'
 model = get_model('vgg19')     
 model.load_state_dict(torch.load(weight_name))
-model.cuda()
+if torch.cuda.is_available():
+    model.cuda()
 model.float()
 model.eval()
 

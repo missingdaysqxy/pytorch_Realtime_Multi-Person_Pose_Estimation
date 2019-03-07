@@ -10,8 +10,8 @@ from pycocotools.cocoeval import COCOeval
 
 import torch
 from training.datasets.coco_data.preprocessing import (inception_preprocess,
-                                              rtpose_preprocess,
-                                              ssd_preprocess, vgg_preprocess)
+                                                       rtpose_preprocess,
+                                                       ssd_preprocess, vgg_preprocess)
 from network.post import decode_pose
 from network import im_transform
 
@@ -32,8 +32,8 @@ The order in this work:
 
 ORDER_COCO = [0, 15, 14, 17, 16, 5, 2, 6, 3, 7, 4, 11, 8, 12, 9, 13, 10]
 
-MID_1 = [1, 8,  9, 1,  11, 12, 1, 2, 3,
-         2,  1, 5, 6, 5,  1, 0,  0,  14, 15]
+MID_1 = [1, 8, 9, 1, 11, 12, 1, 2, 3,
+         2, 1, 5, 6, 5, 1, 0, 0, 14, 15]
 
 MID_2 = [8, 9, 10, 11, 12, 13, 2, 3, 4,
          16, 5, 6, 7, 17, 0, 14, 15, 16, 17]
@@ -47,7 +47,7 @@ def eval_coco(outputs, dataDir, imgIds):
     :returns : float, the mAP score
     """
     with open('results.json', 'w') as f:
-        json.dump(outputs, f)  
+        json.dump(outputs, f)
     annType = 'keypoints'
     prefix = 'person_keypoints'
 
@@ -68,13 +68,13 @@ def eval_coco(outputs, dataDir, imgIds):
     return cocoEval.stats[0]
 
 
-def get_multiplier(img):
+def get_multiplier(img, process_speed=4):
     """Computes the sizes of image at different scales
     :param img: numpy array, the current image
     :returns : list of float. The computed scales
     """
     scale_search = [0.5, 1., 1.5, 2, 2.5]
-    return [x * 368. / float(img.shape[0]) for x in scale_search]
+    return [x * 368. / float(img.shape[0]) for x in scale_search[:process_speed]]
 
 
 def get_coco_val(file_path):
@@ -133,7 +133,10 @@ def get_outputs(multiplier, img, model, preprocess):
         batch_images[m, :, :im_data.shape[1], :im_data.shape[2]] = im_data
 
     # several scales as a batch
-    batch_var = torch.from_numpy(batch_images).cuda().float()
+    if torch.cuda.is_available():
+        batch_var = torch.from_numpy(batch_images).cuda().float()
+    else:
+        batch_var = torch.from_numpy(batch_images).float()
     predicted_outputs, _ = model(batch_var)
     output1, output2 = predicted_outputs[-2], predicted_outputs[-1]
     heatmaps = output2.cpu().data.numpy().transpose(0, 2, 3, 1)
@@ -147,7 +150,7 @@ def get_outputs(multiplier, img, model, preprocess):
         im_cropped, im_scale, real_shape = im_transform.crop_with_factor(
             img, inp_size, factor=8, is_ceil=True)
         heatmap = heatmaps[m, :int(im_cropped.shape[0] /
-                           8), :int(im_cropped.shape[1] / 8), :]
+                                   8), :int(im_cropped.shape[1] / 8), :]
         heatmap = cv2.resize(heatmap, None, fx=8, fy=8,
                              interpolation=cv2.INTER_CUBIC)
         heatmap = heatmap[0:real_shape[0], 0:real_shape[1], :]
@@ -201,7 +204,7 @@ def append_result(image_id, person_to_joint_assoc, joint_list, outputs):
                 keypoints[part, 2] = 1
 
         one_result["score"] = person_to_joint_assoc[ridxPred, -2] * \
-            person_to_joint_assoc[ridxPred, -1]
+                              person_to_joint_assoc[ridxPred, -1]
         one_result["keypoints"] = list(keypoints.reshape(51))
 
         outputs.append(one_result)
@@ -250,11 +253,11 @@ def handle_paf_and_heat(normal_heat, flipped_heat, normal_paf, flipped_paf):
     flipped_paf[:, :, swap_paf[::2]] = -flipped_paf[:, :, swap_paf[::2]]
     averaged_paf = (normal_paf + flipped_paf[:, :, swap_paf]) / 2.
     averaged_heatmap = (
-        normal_heat + flipped_heat[:, ::-1, :][:, :, swap_heat]) / 2.
+                               normal_heat + flipped_heat[:, ::-1, :][:, :, swap_heat]) / 2.
 
     return averaged_paf, averaged_heatmap
 
-        
+
 def run_eval(image_dir, anno_dir, vis_dir, image_list_txt, model, preprocess):
     """Run the evaluation on the test set and report mAP score
     :param model: the model to test
@@ -282,7 +285,7 @@ def run_eval(image_dir, anno_dir, vis_dir, image_list_txt, model, preprocess):
         # Get results of original image
         multiplier = get_multiplier(oriImg)
         orig_paf, orig_heat = get_outputs(
-            multiplier, oriImg, model,  preprocess)
+            multiplier, oriImg, model, preprocess)
 
         # Get results of flipped image
         swapped_img = oriImg[:, ::-1, :]
@@ -298,12 +301,11 @@ def run_eval(image_dir, anno_dir, vis_dir, image_list_txt, model, preprocess):
         param = {'thre1': 0.1, 'thre2': 0.05, 'thre3': 0.5}
         canvas, to_plot, candidate, subset = decode_pose(
             oriImg, param, heatmap, paf)
-            
+
         vis_path = os.path.join(vis_dir, img_paths[i])
         cv2.imwrite(vis_path, to_plot)
         # subset indicated how many peoples foun in this image.
         append_result(img_ids[i], subset, candidate, outputs)
-
 
         # cv2.imshow('test', canvas)
         # cv2.waitKey(0)
