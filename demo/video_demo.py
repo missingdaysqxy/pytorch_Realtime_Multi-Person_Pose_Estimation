@@ -12,6 +12,7 @@ import time
 import argparse
 import numpy as np
 import torch
+
 os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 sys.path.append(os.path.abspath(os.path.curdir))
 from network.rtpose_vgg import get_model
@@ -104,9 +105,10 @@ def main(args):
         print('[*]Process video {} into {}'.format(input_video, output_video))
         cam = cv2.VideoCapture(input_video)
         input_fps = cam.get(cv2.CAP_PROP_FPS)
-        ret_val, input_image = cam.read()
-        if not ret_val:
-            continue
+
+        # ret_val, input_image = cam.read()
+        # if not ret_val:
+        #     continue
         video_length = int(cam.get(cv2.CAP_PROP_FRAME_COUNT))
 
         ending_frame = args.end
@@ -116,11 +118,18 @@ def main(args):
         # Video writer
         output_fps = input_fps / frame_rate_ratio
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter(output_video, fourcc, output_fps, (input_image.shape[1], input_image.shape[0]))
+        height = int(resize_fac * video.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        width = int(resize_fac * video.get(cv2.CAP_PROP_FRAME_WIDTH))
+        out = cv2.VideoWriter(output_video, fourcc, output_fps, (width, height))
         out_h5 = h5py.File(output_video + ".h5", mode="w")
+        out_h5["height"] = height
+        out_h5["width"] = width
         i = 0  # default is 0
         tst = time.time()
-        while (cam.isOpened()) and ret_val and i < ending_frame:
+        while (cam.isOpened()) and i < ending_frame:
+            ret_val, input_image = cam.read()
+            if not ret_val:
+                break
             if i % frame_rate_ratio == 0:
                 tic = time.time()
                 # generate image with body parts
@@ -138,7 +147,6 @@ def main(args):
                            '{}/{}, process time:{:.3f}, total time:{:.3f}'.format(i, ending_frame, (toc - tic),
                                                                                   (toc - tst)), length=20)
                 out.write(canvas)
-            ret_val, input_image = cam.read()
             i += 1
         out.release()
         out_h5.close()
