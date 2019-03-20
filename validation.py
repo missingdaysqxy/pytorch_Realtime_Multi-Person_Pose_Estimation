@@ -6,6 +6,7 @@
 import os
 import sys
 import cv2
+import h5py
 import time
 import argparse
 import torch
@@ -130,7 +131,7 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('image', type=str, help='input image file name')
+    parser.add_argument('video', type=str, help='input video file name')
     parser.add_argument('-w', '--weight', type=str, default='./network/weight/pose_model.pth',
                         help='path to the weights file')
     parser.add_argument('-f', '--resize_factor', type=float, default=1, help='minification factor')
