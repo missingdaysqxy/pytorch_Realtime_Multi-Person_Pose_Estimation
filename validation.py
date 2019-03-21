@@ -8,8 +8,12 @@ import sys
 import cv2
 import h5py
 import time
+import json
 import argparse
 import torch
+import numpy as np
+from torchnet import meter
+from pycocotools.coco import COCO
 from warnings import warn
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "1"
@@ -21,16 +25,16 @@ from evaluate.coco_eval import get_multiplier, get_outputs, handle_paf_and_heat
 IMAGE_EXT = ['.jpg', '.png', '.bmp', '.jpeg', '.jpe', '.tif', '.tiff']
 
 
-def processBar(num, total, msg='', length=50):
+def processBar(num, total, msg='', length=50, end=None):
     rate = num / total
     rate_num = int(rate * 100)
     clth = int(rate * length)
     if len(msg) > 0:
         msg += ':'
     if rate_num == 100:
-        r = '\r%s[%s%d%%]\n' % (msg, '*' * length, rate_num,)
+        r = '\r%s[%s%d%%]%s\n' % (msg, '*' * length, rate_num, end)
     else:
-        r = '\r%s[%s%s%d%%]' % (msg, '*' * clth, '-' * (length - clth), rate_num,)
+        r = '\r%s[%s%s%d%%]%s' % (msg, '*' * clth, '-' * (length - clth), rate_num, end)
     sys.stdout.write(r)
     sys.stdout.flush
     return r.replace('\r', ':')
@@ -57,29 +61,32 @@ def process(model, oriImg, process_speed):
     return to_plot, canvas, joint_list, person_to_joint_assoc
 
 
-def organize_image_io_paths(input_data, output_dir, output_ext=".jpg"):
-    if not os.path.exists(input_data):
-        raise FileNotFoundError("File not exist in {}".format(input_data))
-    io_paths = {"input": [], "output": []}
-    if os.path.isdir(input_data):
-        for root, dirs, files in os.walk(input_data):
-            rel_path = os.path.relpath(root, input_data)
-            for file in files:
-                name, ext = os.path.splitext(file)
-                if ext.lower() in IMAGE_EXT:
-                    input_path = os.path.join(root, file)
-                    output_path = os.path.join(output_dir, rel_path, name + output_ext)
-                    io_paths["input"].append(input_path)
-                    io_paths["output"].append(output_path)
-                else:
-                    warn("Unsupported format: %s" % file)
-    else:
-        name, ext = os.path.splitext(input_data)
-        assert ext.lower() in IMAGE_EXT, "Unsupported format: %s" % input_data
-        output_path = os.path.join(output_dir, os.path.basename(name) + output_ext)
-        io_paths["input"].append(input_data)
-        io_paths["output"].append(output_path)
-    return io_paths
+def get_data(data_dir, json_path, output_dir):
+    if not os.path.exists(data_dir):
+        raise FileNotFoundError("File not exist in {}".format(data_dir))
+    if not os.path.isfile(json_path):
+        raise FileNotFoundError("File not exist in {}".format(json_path))
+    kp_didi2this = [15, 14, 0, 1, -1, -1, 5, -1, 6, -1, 7, -1, 2, -1, 3, -1, 4, -1]
+    coco = COCO(json_path)
+    for i, (img_id, img_info) in enumerate(coco.imgs.items()):
+        image_path = os.path.join(data_dir, img_info["file_name"])
+        if not os.path.isfile(image_path):
+            warn("Image not exist in {}".format(image_path))
+            continue
+        anns = coco.loadAnns(coco.getAnnIds(img_id))
+        keypoints = []
+        for ann in anns:
+            ann_kp = np.array(ann['keypoints']).reshape((-1, 3))
+            new_kp = np.zeros_like(ann_kp)
+            valid_kp_count = 0
+            for i, idx in enumerate(kp_didi2this):
+                if kp_didi2this[idx] >= 0:
+                    new_kp[kp_didi2this[idx]] = ann_kp[i]
+                    if ann_kp[i, 2] != 0:
+                        valid_kp_count += 1
+            keypoints.append([valid_kp_count, new_kp])
+        output_path = os.path.join(output_dir, img_info["file_name"])
+        yield image_path, keypoints, output_path
 
 
 def main(args):
@@ -90,10 +97,10 @@ def main(args):
     print('start processing...')
 
     # Video input & output
-    input_data = args.image
+    data_dir = args.dir
+    json_path = args.coco
     output_dir = "outputs/images"
-    io_paths = organize_image_io_paths(input_data, output_dir)
-    data_count = len(io_paths["input"])
+    data_count = len(os.listdir(data_dir))
 
     # load model
     print('[*]Loading model...')
@@ -106,7 +113,8 @@ def main(args):
 
     # Video reader
     t0 = time.time()
-    for i, (input_path, output_path) in enumerate(zip(io_paths["input"], io_paths["output"])):
+    acc_count = 0
+    for i, (input_path, keypoints, output_path) in enumerate(get_data(data_dir, json_path, output_dir)):
         print('[*]Process {} into {}'.format(input_path, output_path))
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
@@ -116,26 +124,34 @@ def main(args):
         resized_image = cv2.resize(input_image, (0, 0), fx=1 * resize_fac, fy=1 * resize_fac,
                                    interpolation=cv2.INTER_CUBIC)
         to_plot, canvas, joint_list, person_to_joint_assoc = process(model, resized_image, process_speed)
+        kp_count = 0
+        for c, kps in keypoints:
+            kp_count += c
+        # print(len(joint_list), len(person_to_joint_assoc), kp_count, len(keypoints))
+        if len(person_to_joint_assoc) >= len(keypoints):  # human count equal
+            acc_count += 1
+        np.savez_compressed(output_path + ".npz",
+                            {"joint_list": joint_list, "person_to_joint_assoc": person_to_joint_assoc})
         if args.verb:
             cv2.imshow('preview', to_plot)
             cv2.waitKey(1)
         t2 = time.time()
-        processBar(i, data_count,
-                   '{}/{}, process time:{:.3f}, total time:{:.3f}'.format(i, data_count, (t2 - t1),
-                                                                          (t2 - t0)), length=20)
+        processBar(i, data_count, '{}/{},acc:{} process time:{:.3f}, total time:{:.3f}'.format(
+            i, data_count, acc_count / (i + 1), (t2 - t1), (t2 - t0)), length=20, end="\n")
         cv2.imwrite(output_path, canvas)
     cv2.destroyAllWindows()
-    processBar(data_count, data_count,
-               '{}/{}, total time:{:.3f}'.format(i, data_count, (time.time() - t0)), length=20)
+    processBar(data_count, data_count, '{}/{}, acc:{} total time:{:.3f}'.format(
+        data_count, data_count, acc_count / data_count, (time.time() - t0)), length=20)
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('video', type=str, help='input video file name')
+    parser.add_argument('dir', type=str, help='data dir path')
+    parser.add_argument('coco', type=str, help="coco json file")
     parser.add_argument('-w', '--weight', type=str, default='./network/weight/pose_model.pth',
                         help='path to the weights file')
     parser.add_argument('-f', '--resize_factor', type=float, default=1, help='minification factor')
-    parser.add_argument('-s', '--process_speed', type=int, default=2,
+    parser.add_argument('-s', '--process_speed', type=int, default=4,
                         help='Int 1 (fastest, lowest quality) to 4 (slowest, highest quality)')
     parser.add_argument('-v', '--verb', action='store_true', help='show video canvas')
     args = parser.parse_args()

@@ -44,16 +44,16 @@ def process(model, oriImg, process_speed):
 
 
 ## Organize I/O Paths
-def organize_video_io_paths(input_data, output_dir, output_ext=".mp4"):
-    if not os.path.exists(input_data):
-        raise FileNotFoundError("File not exist in {}".format(input_data))
+def organize_1to1_io_paths(input_dir, input_ext, output_dir, output_ext):
+    if not os.path.exists(input_dir):
+        raise FileNotFoundError("File not exist in {}".format(input_dir))
     io_paths = {"input": [], "output": []}
-    if os.path.isdir(input_data):
-        for root, dirs, files in os.walk(input_data):
-            rel_path = os.path.relpath(root, input_data)
+    if os.path.isdir(input_dir):
+        for root, dirs, files in os.walk(input_dir):
+            rel_path = os.path.relpath(root, input_dir)
             for file in files:
                 name, ext = os.path.splitext(file)
-                if ext.lower() in VIDEO_EXT:
+                if ext.lower() in input_ext:
                     input_path = os.path.join(root, file)
                     output_path = os.path.join(output_dir, rel_path, name + output_ext)
                     io_paths["input"].append(input_path)
@@ -61,25 +61,25 @@ def organize_video_io_paths(input_data, output_dir, output_ext=".mp4"):
                 else:
                     warn("Unsupported format: %s" % file)
     else:
-        name, ext = os.path.splitext(input_data)
-        assert ext.lower() in VIDEO_EXT, "Unsupported format: %s" % input_data
+        name, ext = os.path.splitext(input_dir)
+        assert ext.lower() in input_ext, "Unsupported format: %s" % input_dir
         output_path = os.path.join(output_dir, os.path.basename(name) + output_ext)
-        io_paths["input"].append(input_data)
+        io_paths["input"].append(input_dir)
         io_paths["output"].append(output_path)
     return io_paths
 
 
-def organize_image_io_paths(input_data, output_dir, output_ext=".jpg"):
-    if not os.path.exists(input_data):
-        raise FileNotFoundError("File not exist in {}".format(input_data))
+def organize_Nto1_io_paths(input_dir, input_ext, output_dir, output_ext):
+    if not os.path.exists(input_dir):
+        raise FileNotFoundError("File not exist in {}".format(input_dir))
     io_paths = {"input": [], "output": []}
-    if os.path.isdir(input_data):
-        for root, dirs, files in os.walk(input_data):
-            rel_path = os.path.relpath(root, input_data)
+    if os.path.isdir(input_dir):
+        for root, dirs, files in os.walk(input_dir):
+            rel_path = os.path.relpath(root, input_dir)
             image_list = []
             for file in files:
                 name, ext = os.path.splitext(file)
-                if ext.lower() in IMAGE_EXT:
+                if ext.lower() in input_ext:
                     image_path = os.path.join(root, file)
                     image_list.append(image_path)
                 else:
@@ -90,10 +90,10 @@ def organize_image_io_paths(input_data, output_dir, output_ext=".jpg"):
                 io_paths["input"].append(image_list)
                 io_paths["output"].append(output_path)
     else:
-        name, ext = os.path.splitext(input_data)
-        assert ext.lower() in IMAGE_EXT, "Unsupported format: %s" % input_data
+        name, ext = os.path.splitext(input_dir)
+        assert ext.lower() in input_ext, "Unsupported format: %s" % input_dir
         output_path = os.path.join(output_dir, os.path.basename(name) + output_ext)
-        io_paths["input"].append([input_data])
+        io_paths["input"].append([input_dir])
         io_paths["output"].append(output_path)
     return io_paths
 
@@ -128,7 +128,7 @@ def get_video_size(video_path, output_length=None):
     return l, h, w
 
 
-def load_image_frames(image_list, output_length=None, frame_rate_ratio=1):
+def load_images_list(image_list, output_length=None, frame_rate_ratio=1):
     image_count = len(image_list)
     assert image_count > 0
     if output_length is None:
@@ -142,7 +142,7 @@ def load_image_frames(image_list, output_length=None, frame_rate_ratio=1):
             yield image
 
 
-def get_image_size(image_list, output_length=None):
+def get_images_size(image_list, output_length=None):
     image_count = len(image_list)
     assert image_count > 0
     image = cv2.imread(image_list[0])
@@ -155,7 +155,7 @@ def get_image_size(image_list, output_length=None):
 
 ## Calling Process
 def main(args):
-    input_data = args.input_data
+    input_dir = args.input_dir
     input_type = args.input_type  # choose from ["image", "video"]
     output_dir = args.output_dir
     weight_file = args.weight
@@ -177,15 +177,15 @@ def main(args):
     print("Model Ready!")
 
     ## Init I/O Paths
-    if input_type == "image":
-        io_paths = organize_image_io_paths(input_data, output_dir, output_ext)
+    if input_type == "nto1":
+        io_paths = organize_Nto1_io_paths(input_dir, IMAGE_EXT, output_dir, output_ext)
     else:
-        io_paths = organize_video_io_paths(input_data, output_dir, output_ext)
+        io_paths = organize_1to1_io_paths(input_dir, VIDEO_EXT, output_dir, output_ext)
     total_item = len(io_paths["input"])
     print("Items count: ", total_item)
 
     ignore_item = 0
-    for i, (input_data, output_path) in enumerate(zip(io_paths["input"], io_paths["output"])):
+    for i, (input_dir, output_path) in enumerate(zip(io_paths["input"], io_paths["output"])):
         if os.path.isfile(output_path):
             if rebuild_exist_file:
                 title = '[{}/{}]Rebuild {} from {}'
@@ -195,16 +195,16 @@ def main(args):
                 continue
         else:
             title = '[{}/{}]Build {} from {}'
-        if isinstance(input_data, str):  # process video
-            source_position = input_data
-            loader = load_video_frames(input_data, output_length, frame_rate_ratio)
-            length, h, w = get_video_size(input_data, output_length)
-        elif isinstance(input_data, list):  # process images
-            source_position = os.path.dirname(input_data[0])
-            loader = load_image_frames(input_data, output_length, frame_rate_ratio)
-            length, h, w = get_image_size(input_data, output_length)
+        if isinstance(input_dir, str):  # process video
+            source_position = input_dir
+            loader = load_video_frames(input_dir, output_length, frame_rate_ratio)
+            length, h, w = get_video_size(input_dir, output_length)
+        elif isinstance(input_dir, list):  # process images
+            source_position = os.path.dirname(input_dir[0])
+            loader = load_images_list(input_dir, output_length, frame_rate_ratio)
+            length, h, w = get_images_size(input_dir, output_length)
         else:
-            raise TypeError("Expected string or list(string), but got %s" % type(input_data))
+            raise TypeError("Expected string or list(string), but got %s" % type(input_dir))
         print(title.format(i, total_item, output_path, source_position))
         # Video writer
         try:
@@ -249,9 +249,9 @@ if __name__ == "__main__":
     parse = argparse.ArgumentParser(
         "A pre-work for create Action-Datasets, generate .h5 files to "
         "store the joints and skeletons of humans in either videos or pictures")
-    parse.add_argument("input", metavar="input_data", type=str)
+    parse.add_argument("input", metavar="input_dir", type=str)
     parse.add_argument("output", metavar="output_dir", type=str)
-    parse.add_argument("-t", "--input_type", choices=["image", "video"], default="image")
+    parse.add_argument("-t", "--input_type", choices=["1to1", "nto1"], default="1to1")
     parse.add_argument('-w', '--weight', type=str, default='./network/weight/pose_model.pth',
                        help='path to the weights file')
     parse.add_argument("-b", "--rebuild", action="store_true", help="rebuild existed file")
