@@ -16,7 +16,7 @@ from torchnet import meter
 from pycocotools.coco import COCO
 from warnings import warn
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 sys.path.append(os.path.abspath(os.path.curdir))
 from network.rtpose_vgg import get_model
 from network.post import decode_pose
@@ -61,13 +61,14 @@ def process(model, oriImg, process_speed):
     return to_plot, canvas, joint_list, person_to_joint_assoc
 
 
-def get_data(data_dir, json_path, output_dir):
+def get_data(data_dir, json_path):
     if not os.path.exists(data_dir):
         raise FileNotFoundError("File not exist in {}".format(data_dir))
     if not os.path.isfile(json_path):
         raise FileNotFoundError("File not exist in {}".format(json_path))
     kp_didi2this = [15, 14, 0, 1, -1, -1, 5, -1, 6, -1, 7, -1, 2, -1, 3, -1, 4, -1]
     coco = COCO(json_path)
+    rets=[]
     for i, (img_id, img_info) in enumerate(coco.imgs.items()):
         image_path = os.path.join(data_dir, img_info["file_name"])
         if not os.path.isfile(image_path):
@@ -85,9 +86,8 @@ def get_data(data_dir, json_path, output_dir):
                     if ann_kp[i, 2] != 0:
                         valid_kp_count += 1
             keypoints.append([valid_kp_count, new_kp])
-        output_path = os.path.join(output_dir, img_info["file_name"])
-        yield image_path, keypoints, output_path
-
+        rets.append(image_path, keypoints)
+    return rets
 
 def main(args):
     weight_file = args.weight
@@ -99,8 +99,6 @@ def main(args):
     # Video input & output
     data_dir = args.dir
     json_path = args.coco
-    output_dir = "outputs/images"
-    data_count = len(os.listdir(data_dir))
 
     # load model
     print('[*]Loading model...')
@@ -114,10 +112,9 @@ def main(args):
     # Video reader
     t0 = time.time()
     acc_count = 0
-    for i, (input_path, keypoints, output_path) in enumerate(get_data(data_dir, json_path, output_dir)):
-        print('[*]Process {} into {}'.format(input_path, output_path))
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-
+    data=get_data(data_dir, json_path)
+    data_count = len(data)
+    for i, (input_path, keypoints) in enumerate(data):
         input_image = cv2.imread(input_path)
         t1 = time.time()
         # generate image with body parts
@@ -127,18 +124,15 @@ def main(args):
         kp_count = 0
         for c, kps in keypoints:
             kp_count += c
-        # print(len(joint_list), len(person_to_joint_assoc), kp_count, len(keypoints))
-        if len(person_to_joint_assoc) >= len(keypoints):  # human count equal
+        if len(person_to_joint_assoc) == len(keypoints):  # human count equal
             acc_count += 1
-        np.savez_compressed(output_path + ".npz",
-                            {"joint_list": joint_list, "person_to_joint_assoc": person_to_joint_assoc})
         if args.verb:
             cv2.imshow('preview', to_plot)
             cv2.waitKey(1)
         t2 = time.time()
-        processBar(i, data_count, '{}/{},acc:{} process time:{:.3f}, total time:{:.3f}'.format(
-            i, data_count, acc_count / (i + 1), (t2 - t1), (t2 - t0)), length=20, end="\n")
-        cv2.imwrite(output_path, canvas)
+        processBar(i, data_count, '[{}/{}]find {} keypoints in {} humans, groundtruth is {} kps in {} humans. acc:{} process time:{:.3f}, total time:{:.3f}'.format(
+            i, data_count,len(joint_list), len(person_to_joint_assoc), kp_count, len(keypoints),
+             acc_count / (i + 1), (t2 - t1), (t2 - t0)), length=20, end="\n")
     cv2.destroyAllWindows()
     processBar(data_count, data_count, '{}/{}, acc:{} total time:{:.3f}'.format(
         data_count, data_count, acc_count / data_count, (time.time() - t0)), length=20)
