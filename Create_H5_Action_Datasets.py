@@ -10,12 +10,12 @@ import argparse
 import cv2
 import h5py
 import torch as t
-from warnings import warn
 
 sys.path.append(os.path.abspath(os.path.curdir))
 from network.rtpose_vgg import get_model
 from network.post import decode_pose
 from evaluate.coco_eval import get_multiplier, get_outputs, handle_paf_and_heat
+from utils import organize_1to1_io_paths,organize_Nto1_io_paths
 
 ## Paramenters & Constants
 VIDEO_EXT = ['.mp4', '.avi', '.mpg', '.mpeg', '.mov']
@@ -42,60 +42,6 @@ def process(model, oriImg, process_speed):
     to_plot, canvas, joint_list, person_to_joint_assoc = decode_pose(oriImg, param, heatmap, paf)
     return to_plot, canvas, joint_list, person_to_joint_assoc
 
-
-## Organize I/O Paths
-def organize_1to1_io_paths(input_dir, input_ext, output_dir, output_ext):
-    if not os.path.exists(input_dir):
-        raise FileNotFoundError("File not exist in {}".format(input_dir))
-    io_paths = {"input": [], "output": []}
-    if os.path.isdir(input_dir):
-        for root, dirs, files in os.walk(input_dir):
-            rel_path = os.path.relpath(root, input_dir)
-            for file in files:
-                name, ext = os.path.splitext(file)
-                if ext.lower() in input_ext:
-                    input_path = os.path.join(root, file)
-                    output_path = os.path.join(output_dir, rel_path, name + output_ext)
-                    io_paths["input"].append(input_path)
-                    io_paths["output"].append(output_path)
-                else:
-                    warn("Unsupported format: %s" % file)
-    else:
-        name, ext = os.path.splitext(input_dir)
-        assert ext.lower() in input_ext, "Unsupported format: %s" % input_dir
-        output_path = os.path.join(output_dir, os.path.basename(name) + output_ext)
-        io_paths["input"].append(input_dir)
-        io_paths["output"].append(output_path)
-    return io_paths
-
-
-def organize_Nto1_io_paths(input_dir, input_ext, output_dir, output_ext):
-    if not os.path.exists(input_dir):
-        raise FileNotFoundError("File not exist in {}".format(input_dir))
-    io_paths = {"input": [], "output": []}
-    if os.path.isdir(input_dir):
-        for root, dirs, files in os.walk(input_dir):
-            rel_path = os.path.relpath(root, input_dir)
-            image_list = []
-            for file in files:
-                name, ext = os.path.splitext(file)
-                if ext.lower() in input_ext:
-                    image_path = os.path.join(root, file)
-                    image_list.append(image_path)
-                else:
-                    warn("Unsupported format: %s" % file)
-            if len(image_list) > 0:
-                output_path = os.path.join(output_dir, rel_path + output_ext)
-                image_list = sorted(image_list)
-                io_paths["input"].append(image_list)
-                io_paths["output"].append(output_path)
-    else:
-        name, ext = os.path.splitext(input_dir)
-        assert ext.lower() in input_ext, "Unsupported format: %s" % input_dir
-        output_path = os.path.join(output_dir, os.path.basename(name) + output_ext)
-        io_paths["input"].append([input_dir])
-        io_paths["output"].append(output_path)
-    return io_paths
 
 
 ## Data Loader
@@ -155,10 +101,11 @@ def get_images_size(image_list, output_length=None):
 
 ## Calling Process
 def main(args):
-    input_dir = args.input_dir
+    input_data = args.input_dir
     input_type = args.input_type  # choose from ["image", "video"]
     output_dir = args.output_dir
     weight_file = args.weight
+    input_ext = args.input_ext
     output_ext = args.out_ext
     frame_rate_ratio = args.frame_ratio  # analyze every [n] frames
     process_speed = args.process_speed  # int, 1 (fastest, lowest quality) to 4 (slowest, highest quality)
@@ -177,10 +124,14 @@ def main(args):
     print("Model Ready!")
 
     ## Init I/O Paths
-    if input_type == "nto1":
-        io_paths = organize_Nto1_io_paths(input_dir, IMAGE_EXT, output_dir, output_ext)
+    _input_ext_ = IMAGE_EXT if input_ext == "image" \
+        else VIDEO_EXT if input_ext == "video" \
+        else input_ext if isinstance(input_ext, list) \
+        else [input_ext]
+    if input_type == "1to1":
+        io_paths = organize_1to1_io_paths(input_data, _input_ext_, output_dir, output_ext)
     else:
-        io_paths = organize_1to1_io_paths(input_dir, VIDEO_EXT, output_dir, output_ext)
+        io_paths = organize_Nto1_io_paths(input_data, _input_ext_, output_dir, output_ext)
     total_item = len(io_paths["input"])
     print("Items count: ", total_item)
 
@@ -213,6 +164,7 @@ def main(args):
             fourcc = cv2.VideoWriter_fourcc(*'mp4v')
             height = int(resize_fac * h)
             width = int(resize_fac * w)
+            print("source:{}x{}  target:{}x{}".format(h, w, height, width))
             out = cv2.VideoWriter(output_path, fourcc, output_fps, (width, height))
             out_h5 = h5py.File(output_path + ".h5", mode="w")
             out_h5["height"] = height

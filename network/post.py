@@ -210,7 +210,7 @@ def find_connected_joints(param, paf_upsamp, joint_list_per_joint_type, num_inte
                     limb_dir = joint_dst[:2] - joint_src[:2]
                     # Compute the distance/length of the potential limb (norm
                     # of limb_dir)
-                    limb_dist = np.sqrt(np.sum(limb_dir**2)) + 1e-8
+                    limb_dist = np.sqrt(np.sum(limb_dir ** 2)) + 1e-8
                     limb_dir = limb_dir / limb_dist  # Normalize limb_dir to be a unit vector
 
                     # Linearly distribute num_intermed_pts points from the x
@@ -237,7 +237,8 @@ def find_connected_joints(param, paf_upsamp, joint_list_per_joint_type, num_inte
                         # Last value is the combined paf(+limb_dist) + heatmap
                         # scores of both joints
                         connection_candidates.append(
-                            [i, j, score_penalizing_long_dist, score_penalizing_long_dist + joint_src[2] + joint_dst[2]])
+                            [i, j, score_penalizing_long_dist,
+                             score_penalizing_long_dist + joint_src[2] + joint_dst[2]])
 
             # Sort connection candidates based on their
             # score_penalizing_long_dist
@@ -303,7 +304,7 @@ def group_limbs_of_same_person(connected_limbs, joint_list):
                     # And update the total score (+= heatmap score of joint_dst
                     # + score of connecting joint_src with joint_dst)
                     person_limbs[-2] += joint_list[limb_info[1]
-                                                   .astype(int), 2] + limb_info[2]
+                                                       .astype(int), 2] + limb_info[2]
             elif len(person_assoc_idx) == 2:  # if found 2 and disjoint, merge them
                 person1_limbs = person_to_joint_assoc[person_assoc_idx[0]]
                 person2_limbs = person_to_joint_assoc[person_assoc_idx[1]]
@@ -322,7 +323,7 @@ def group_limbs_of_same_person(connected_limbs, joint_list):
                     person1_limbs[joint_dst_type] = limb_info[1]
                     person1_limbs[-1] += 1
                     person1_limbs[-2] += joint_list[limb_info[1]
-                                                    .astype(int), 2] + limb_info[2]
+                                                        .astype(int), 2] + limb_info[2]
             else:  # No person has claimed any of these joints, create a new person
                 # Initialize person info to all -1 (no joint associations)
                 row = -1 * np.ones(20)
@@ -355,12 +356,7 @@ def group_limbs_of_same_person(connected_limbs, joint_list):
 
 
 def plot_pose(img_orig, joint_list, person_to_joint_assoc, bool_fast_plot=True, plot_ear_to_shoulder=False):
-    canvas = img_orig.copy()  # Make a copy so we don't modify the original image
-
-    # to_plot is the location of all joints found overlaid on top of the
-    # original image
-    to_plot = canvas.copy() if bool_fast_plot else cv2.addWeighted(
-        img_orig, 0.3, canvas, 0.7, 0)
+    canvas = np.zeros_like(img_orig, dtype=np.uint8)
 
     limb_thickness = 4
     # Last 2 limbs connect ears with shoulders and this looks very weird.
@@ -377,11 +373,11 @@ def plot_pose(img_orig, joint_list, person_to_joint_assoc, bool_fast_plot=True, 
             # joint_coords[:,0] represents Y coords of both joints;
             # joint_coords[:,1], X coords
             joint_coords = joint_list[joint_indices, 0:2]
-            
+
             for joint in joint_coords:  # Draw circles at every joint
                 cv2.circle(canvas, tuple(joint[0:2].astype(
-                    int)), 4, (255,255,255), thickness=-1)            
-            # mean along the axis=0 computes meanYcoord and meanXcoord -> Round
+                    int)), 4, (255, 255, 255), thickness=-1)
+                # mean along the axis=0 computes meanYcoord and meanXcoord -> Round
             # and make int to avoid errors
             coords_center = tuple(
                 np.round(np.mean(joint_coords, 0)).astype(int))
@@ -401,7 +397,8 @@ def plot_pose(img_orig, joint_list, person_to_joint_assoc, bool_fast_plot=True, 
             cv2.fillConvexPoly(cur_canvas, polygon, colors[limb_type])
             if not bool_fast_plot:
                 canvas = cv2.addWeighted(canvas, 0.4, cur_canvas, 0.6, 0)
-
+    # to_plot is the location of all joints found overlaid on top of the original image
+    to_plot = cv2.addWeighted(img_orig.copy(), 0.3, canvas, 0.7, 0)
     return to_plot, canvas
 
 
@@ -414,7 +411,8 @@ def decode_pose(img_orig, param, heatmaps, pafs):
     # joint_list is an unravel'd version of joint_list_per_joint, where we add
     # a 5th column to indicate the joint_type (0=nose, 1=neck...)
     joint_list = np.array([tuple(peak) + (joint_type,) for joint_type,
-                           joint_peaks in enumerate(joint_list_per_joint_type) for peak in joint_peaks])
+                                                           joint_peaks in enumerate(joint_list_per_joint_type) for peak
+                           in joint_peaks])
 
     # Step 2: find which joints go together to form limbs (which wrists go
     # with which elbows)

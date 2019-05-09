@@ -6,32 +6,20 @@
 import os
 import sys
 import cv2
+import h5py
 import time
 import argparse
 import torch
-from warnings import warn
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 sys.path.append(os.path.abspath(os.path.curdir))
 from network.rtpose_vgg import get_model
 from network.post import decode_pose
 from evaluate.coco_eval import get_multiplier, get_outputs, handle_paf_and_heat
+from utils import organize_1to1_io_paths, organize_Nto1_io_paths, processBar
 
 VIDEO_EXT = ['.mp4', '.avi', '.mpg', '.mpeg', '.mov']
-
-def processBar(num, total, msg='', length=50):
-    rate = num / total
-    rate_num = int(rate * 100)
-    clth = int(rate * length)
-    if len(msg) > 0:
-        msg += ':'
-    if rate_num == 100:
-        r = '\r%s[%s%d%%]\n' % (msg, '*' * length, rate_num,)
-    else:
-        r = '\r%s[%s%s%d%%]' % (msg, '*' * clth, '-' * (length - clth), rate_num,)
-    sys.stdout.write(r)
-    sys.stdout.flush
-    return r.replace('\r', ':')
+OUT_VDO_FMT = VIDEO_EXT[0]
 
 
 def process(model, oriImg, process_speed):
@@ -55,46 +43,21 @@ def process(model, oriImg, process_speed):
     return to_plot, canvas, joint_list, person_to_joint_assoc
 
 
-def organize_video_io_paths(input_data, output_dir, output_format):
-    io_paths = {"input": [], "output": []}
-    if not os.path.exists(input_data):
-        raise FileNotFoundError("File not exist in {}".format(input_data))
-    if os.path.isdir(input_data):
-        for root, dirs, files in os.walk(input_data):
-            rel_path = os.path.relpath(root, input_data)
-            for file in files:
-                name, ext = os.path.splitext(file)
-                if ext.lower() in VIDEO_EXT:
-                    input_path = os.path.join(root, file)
-                    output_path = os.path.join(output_dir, rel_path, name + output_format)
-                    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-                    io_paths["input"].append(input_path)
-                    io_paths["output"].append(output_path)
-                else:
-                    warn("Unsupported format: %s" % file)
-    else:
-        name, ext = os.path.splitext(input_data)
-        assert ext.lower() in VIDEO_EXT, "Unsupported format: %s" % input_data
-        output_path = os.path.join(output_dir, os.path.basename(name) + output_format)
-        io_paths["input"].append(input_data)
-        io_paths["output"].append(output_path)
-    return io_paths
-
-
 def main(args):
-    input_data = args.video
+    input_data = args.input
     weight_file = args.weight
     frame_rate_ratio = args.frame_ratio
     process_speed = args.process_speed
     resize_fac = args.resize_factor
-    output_dir = 'outputs/video'
-    output_format = '.mp4'
+    output_dir = args.output
+    output_format = '.h5'
+    save_demo = args.verb
 
     print('start processing...')
 
     # Video input & output
 
-    io_paths = organize_video_io_paths(input_data, output_dir, output_format)
+    io_paths = organize_1to1_io_paths(input_data, VIDEO_EXT, output_dir, output_format)
 
     # load model
     print('[*]Loading model...')
@@ -108,28 +71,30 @@ def main(args):
     for input_path, output_path in zip(io_paths["input"], io_paths["output"]):
         print('[*]Process video {} into {}'.format(input_path, output_path))
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        cam = cv2.VideoCapture(input_path)
-        input_fps = cam.get(cv2.CAP_PROP_FPS)
 
-        # ret_val, input_image = cam.read()
-        # if not ret_val:
-        #     continue
-        video_length = int(cam.get(cv2.CAP_PROP_FRAME_COUNT))
+        # input video info
+        cap = cv2.VideoCapture(input_path)
+        input_fps = cap.get(cv2.CAP_PROP_FPS)
+        height = int(resize_fac * cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        width = int(resize_fac * cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        video_length = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
         ending_frame = args.out_length
         if ending_frame is None:
             ending_frame = video_length
 
-        # Video writer
-        output_fps = input_fps / frame_rate_ratio
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        height = int(resize_fac * input_data.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        width = int(resize_fac * input_data.get(cv2.CAP_PROP_FRAME_WIDTH))
-        out = cv2.VideoWriter(output_path, fourcc, output_fps, (width, height))
+        out_h5 = h5py.File(output_path, mode="w")
+        out_h5["height"] = height
+        out_h5["width"] = width
+        if save_demo:  # Video writer
+            demo_path = os.path.splitext(output_path)[0] + ".mp4"
+            output_fps = input_fps / frame_rate_ratio
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            out_demo = cv2.VideoWriter(demo_path, fourcc, output_fps, (width, height))
         i = 0  # default is 0
         t0 = time.time()
-        while (cam.isOpened()) and i < ending_frame:
-            ret_val, input_image = cam.read()
+        while (cap.isOpened()) and i < ending_frame:
+            ret_val, input_image = cap.read()
             if not ret_val:
                 break
             if i % frame_rate_ratio == 0:
@@ -138,26 +103,29 @@ def main(args):
                 resized_image = cv2.resize(input_image, (0, 0), fx=1 * resize_fac, fy=1 * resize_fac,
                                            interpolation=cv2.INTER_CUBIC)
                 to_plot, canvas, joint_list, person_to_joint_assoc = process(model, resized_image, process_speed)
-                if args.verb:
-                    cv2.imshow('preview', to_plot)
-                    cv2.waitKey(1)
+                frame_h5 = out_h5.create_group("frame%d" % i)
+                frame_h5.create_dataset("joint_list", data=joint_list)
+                frame_h5.create_dataset("person_to_joint_assoc", data=person_to_joint_assoc)
+                if save_demo:
+                    out_demo.write(canvas)
                 t2 = time.time()
                 processBar(i, ending_frame,
                            '{}/{}, process time:{:.3f}, total time:{:.3f}'.format(i, ending_frame, (t2 - t1),
                                                                                   (t2 - t0)), length=20)
-                out.write(canvas)
             i += 1
-        out.release()
-        cv2.destroyAllWindows()
+        if save_demo:
+            out_demo.release()
+        out_h5.close()
         processBar(ending_frame, ending_frame,
                    '{}/{}, total time:{:.3f}'.format(i, ending_frame, (time.time() - t0)),
-                   length=20)
-
+                   length=45)
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('video', type=str, help='input video file name')
+    parser.add_argument('input', type=str, help='input video file or directory path')
+    parser.add_argument('-o', '--output', type=str, default='outputs',
+                        help='output directory to save h5py file(s)')
     parser.add_argument('-w', '--weight', type=str, default='./network/weight/pose_model.pth',
                         help='path to the weights file')
     parser.add_argument('-f', '--resize_factor', type=float, default=1, help='minification factor')
@@ -165,6 +133,7 @@ if __name__ == '__main__':
     parser.add_argument('-s', '--process_speed', type=int, default=2,
                         help='Int 1 (fastest, lowest quality) to 4 (slowest, highest quality)')
     parser.add_argument('-l', '--out_length', type=int, default=None, help='Last video frame to analyze')
-    parser.add_argument('-v', '--verb', action='store_true', help='show video canvas')
+    parser.add_argument('-v', '--verb', action='store_true',
+                        help='FLAG: save mp4 video demo(s) into output directory or not')
     args = parser.parse_args()
     main(args)
